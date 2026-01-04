@@ -1,0 +1,139 @@
+@import 'tailwindcss';
+
+/* CSS Custom Properties for Theming */
+:root {
+  --color-bg: #fafafa;
+  --color-bg-secondary: #f5f5f5;
+  --color-text: #171717;
+  --color-text-secondary: #525252;
+  --color-text-muted: #a3a3a3;
+  --color-border: #e5e5e5;
+  --color-border-hover: #d4d4d4;
+  --color-card: #ffffff;
+  --color-shadow: rgba(0, 0, 0, 0.05);
+  --color-focus: #171717;
+}
+
+.dark {
+  --color-bg: #0a0a0a;
+  --color-bg-secondary: #171717;
+  --color-text: #fafafa;
+  --color-text-secondary: #a3a3a3;
+  --color-text-muted: #525252;
+  --color-border: #262626;
+  --color-border-hover: #404040;
+  --color-card: #171717;
+  --color-shadow: rgba(0, 0, 0, 0.3);
+  --color-focus: #fafafa;
+}
+
+@layer base {
+  body {
+    background-color: var(--color-bg);
+    color: var(--color-text);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-feature-settings:
+      'rlig' 1,
+      'calt' 1;
+  }
+}
+
+@layer utilities {
+  /* Theme-aware backgrounds */
+  .bg-theme {
+    background-color: var(--color-bg);
+  }
+
+  .bg-theme-secondary {
+    background-color: var(--color-bg-secondary);
+  }
+
+  .bg-theme-card {
+    background-color: var(--color-card);
+  }
+
+  /* Theme-aware text */
+  .text-theme {
+    color: var(--color-text);
+  }
+
+  .text-theme-secondary {
+    color: var(--color-text-secondary);
+  }
+
+  .text-theme-muted {
+    color: var(--color-text-muted);
+  }
+
+  /* Theme-aware borders */
+  .border-theme {
+    border-color: var(--color-border);
+  }
+
+  /* Custom scrollbar */
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background-color: var(--color-bg-secondary);
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background-color: var(--color-border-hover);
+    border-radius: 9999px;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background-color: var(--color-text-muted);
+  }
+
+  /* Subtle gradient backgrounds */
+  .gradient-subtle {
+    background: linear-gradient(135deg, var(--color-bg) 0%, var(--color-bg-secondary) 100%);
+  }
+
+  /* Elegant shadow */
+  .shadow-elegant {
+    box-shadow:
+      0 1px 3px 0 var(--color-shadow),
+      0 4px 12px 0 var(--color-shadow);
+  }
+
+  /* Refined border */
+  .border-refined {
+    border: 1px solid var(--color-border);
+  }
+}
+
+@theme {
+  /* Override grays to prevent P3/LAB colors for Framer Motion compatibility */
+  --color-gray-50: #f9fafb;
+  --color-gray-100: #f3f4f6;
+  --color-gray-200: #e5e7eb;
+  --color-gray-300: #d1d5db;
+  --color-gray-400: #9ca3af;
+  --color-gray-500: #6b7280;
+  --color-gray-600: #4b5563;
+  --color-gray-700: #374151;
+  --color-gray-800: #1f2937;
+  --color-gray-900: #111827;
+  --color-gray-950: #030712;
+}
+
+/* Smooth transitions */
+* {
+  transition-property: color, background-color, border-color, opacity, transform;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 200ms;
+}
+
+/* Focus styles */
+*:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px var(--color-focus),
+    0 0 0 4px var(--color-bg);
+}

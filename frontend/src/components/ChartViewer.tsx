@@ -1,0 +1,750 @@
+"use client";
+
+import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react';
+import { ChartCandidate, AnalysisResult } from '@/types';
+import embed, { VisualizationSpec } from 'vega-embed';
+import { View } from 'vega';
+import { Download, Copy, Sparkles, Share2, Settings } from 'lucide-react';
+import { motion } from 'framer-motion';
+import { createShareLink, getExecutiveSummary } from '@/services/api';
+import { useToast } from '@/components/Toast';
+import MarkdownRenderer from '@/components/MarkdownRenderer';
+import DataPreview from '@/components/DataPreview';
+import { FileText, X } from 'lucide-react';
+
+interface ChartViewerProps {
+    candidate: ChartCandidate;
+    dataset: Record<string, unknown>[];
+    alternatives?: ChartCandidate[];
+    insights?: string[];
+    surprise?: AnalysisResult['surprise'];
+    onChartChange?: (candidate: ChartCandidate) => void;
+    result?: AnalysisResult; // Full result for sharing
+    file?: File; // For generating things that require re-upload like executive summary
+}
+
+export default function ChartViewer({ 
+    candidate, 
+    dataset, 
+    alternatives = [], 
+    insights = [],
+    surprise,
+    onChartChange,
+    result,
+    file
+}: ChartViewerProps) {
+    const containerRef = useRef<HTMLDivElement>(null);
+    const viewRef = useRef<View | null>(null);
+    const [view, setView] = useState<View | null>(null);
+    const [isLoading, setIsLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+    const [selectedChart, setSelectedChart] = useState<ChartCandidate>(candidate);
+    const [showSurprise, setShowSurprise] = useState(false);
+    const [isSharing, setIsSharing] = useState(false);
+    const [summary, setSummary] = useState<string | null>(null);
+    const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
+    const [showSummaryModal, setShowSummaryModal] = useState(false);
+    const toast = useToast();
+    
+    // Axis customization state
+    const [showAxisPanel, setShowAxisPanel] = useState(false);
+    const [showGrid, setShowGrid] = useState(true);
+    const [showLabels, setShowLabels] = useState(true);
+    const [xAxisTitle, setXAxisTitle] = useState('');
+    const [yAxisTitle, setYAxisTitle] = useState('');
+    
+    // Chart categorization state
+    const [activeFilter, setActiveFilter] = useState<string>('all');
+    const [expandedColumns, setExpandedColumns] = useState<Set<string>>(new Set());
+    
+    // Compute unique chart types for filter tabs
+    const chartTypes = useMemo(() => {
+        const types = new Set(alternatives.map(alt => alt.chart_type));
+        return ['all', ...Array.from(types)];
+    }, [alternatives]);
+    
+    // Group charts by column and filter by type
+    const { topCharts, groupedByColumn, filteredCharts } = useMemo(() => {
+        // Top 5 recommendations (highest score)
+        const top = alternatives.slice(0, 5);
+        
+        // Filter by active type
+        const filtered = activeFilter === 'all' 
+            ? alternatives 
+            : alternatives.filter(alt => alt.chart_type === activeFilter);
+        
+        // Group remaining by column (x_column)
+        const grouped: Record<string, typeof alternatives> = {};
+        filtered.slice(5).forEach(alt => {
+            const column = alt.x_column || 'Other';
+            if (!grouped[column]) grouped[column] = [];
+            grouped[column].push(alt);
+        });
+        
+        return { topCharts: top, groupedByColumn: grouped, filteredCharts: filtered };
+    }, [alternatives, activeFilter]);
+    
+    const toggleColumnExpand = (column: string) => {
+        setExpandedColumns(prev => {
+            const next = new Set(prev);
+            if (next.has(column)) next.delete(column);
+            else next.add(column);
+            return next;
+        });
+    };
+
+
+    // Memoize the spec to prevent unnecessary re-renders
+    const chartSpec = useMemo(() => {
+        const activeCandidate = showSurprise && surprise ? {
+            spec: surprise.spec,
+            title: surprise.insight,
+            chart_type: surprise.chart_type
+        } : selectedChart;
+        
+        if (!activeCandidate.spec) return null;
+        const spec = JSON.parse(JSON.stringify({ ...activeCandidate.spec, data: { values: dataset } })) as VisualizationSpec;
+        
+        // Apply axis customizations
+        const specWithConfig = spec as VisualizationSpec & { 
+            config?: { axis?: Record<string, unknown> }, 
+            encoding?: { x?: { title?: string, axis?: Record<string, unknown> }, y?: { title?: string, axis?: Record<string, unknown> } } 
+        };
+        
+        // Configure grid visibility
+        if (specWithConfig.config) {
+            specWithConfig.config.axis = {
+                ...specWithConfig.config.axis,
+                grid: showGrid,
+                labels: showLabels
+            };
+        }
+        
+        // Apply custom axis titles
+        if (specWithConfig.encoding) {
+            if (xAxisTitle && specWithConfig.encoding.x) {
+                specWithConfig.encoding.x.title = xAxisTitle;
+            }
+            if (yAxisTitle && specWithConfig.encoding.y) {
+                specWithConfig.encoding.y.title = yAxisTitle;
+            }
+        }
+        
+        // Add animations - use type guard for mark property
+        const specWithMark = spec as VisualizationSpec & { mark?: { type?: string } };
+        if (specWithMark.mark && typeof specWithMark.mark === 'object' && specWithMark.mark.type) {
+            if (specWithMark.mark.type === 'line') {
+                specWithMark.mark = { ...specWithMark.mark, strokeWidth: 3, interpolate: 'monotone' } as typeof specWithMark.mark;
+            } else if (specWithMark.mark.type === 'bar') {
+                specWithMark.mark = { ...specWithMark.mark, cornerRadiusEnd: 4 } as typeof specWithMark.mark;
+            }
+        }
+        
+        return spec;
+    }, [selectedChart, dataset, showSurprise, surprise, showGrid, showLabels, xAxisTitle, yAxisTitle]);
+
+    useEffect(() => {
+        if (!containerRef.current || !chartSpec) {
+            setIsLoading(false);
+            return;
+        }
+
+        setIsLoading(true);
+        setError(null);
+
+        // Clean up previous view
+        if (viewRef.current) {
+            try {
+                viewRef.current.finalize();
+            } catch {
+                // Ignore errors during cleanup
+            }
+            viewRef.current = null;
+        }
+
+        let isMounted = true;
+
+        embed(containerRef.current, chartSpec, { 
+            actions: false,
+            renderer: 'svg',
+            // Enable animations
+            tooltip: true
+        }).then((res) => {
+            if (isMounted) {
+                viewRef.current = res.view;
+                setView(res.view);
+                setIsLoading(false);
+            }
+        }).catch(err => {
+            if (isMounted) {
+                console.error('Chart rendering error:', err);
+                setError('Failed to render chart. Please try again.');
+                setIsLoading(false);
+            }
+        });
+
+        return () => {
+            isMounted = false;
+            if (viewRef.current) {
+                try {
+                    viewRef.current.finalize();
+                } catch {
+                    // Ignore errors during cleanup
+                }
+                viewRef.current = null;
+            }
+        };
+    }, [chartSpec]); // Only re-render when spec changes
+
+    const handleDownload = useCallback(async (format: 'png' | 'svg') => {
+        if (!view) return;
+        
+        try {
+            const url = await view.toImageURL(format);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `chart.${format}`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        } catch (err) {
+            console.error('Download error:', err);
+            setError('Failed to download chart. Please try again.');
+        }
+    }, [view]);
+
+    const handleCopyToClipboard = useCallback(async () => {
+        if (!view) return;
+        
+        try {
+            const url = await view.toImageURL('png');
+            const response = await fetch(url);
+            const blob = await response.blob();
+            await navigator.clipboard.write([
+                new ClipboardItem({ 'image/png': blob })
+            ]);
+            toast.success('Chart copied to clipboard!');
+        } catch (err) {
+            console.error('Copy error:', err);
+            setError('Failed to copy chart. Please try again.');
+        }
+    }, [view, toast]);
+
+    const handleChartSelect = useCallback((alt: ChartCandidate) => {
+        setSelectedChart(alt);
+        setShowSurprise(false);
+        if (onChartChange) {
+            onChartChange(alt);
+        }
+    }, [onChartChange]);
+
+    const handleSurpriseMe = useCallback(() => {
+        if (surprise) {
+            setShowSurprise(true);
+            if (onChartChange) {
+                onChartChange({
+                    ...candidate,
+                    spec: surprise.spec,
+                    title: surprise.insight,
+                    chart_type: surprise.chart_type
+                });
+            }
+        }
+    }, [surprise, candidate, onChartChange]);
+
+    const handleShare = useCallback(async () => {
+        if (!result || isSharing) return;
+        
+        setIsSharing(true);
+        try {
+            const shareData = await createShareLink(result);
+            const fullUrl = `${window.location.origin}/share/${shareData.share_token}`;
+            
+            // Copy to clipboard
+            await navigator.clipboard.writeText(fullUrl);
+            toast.success(`Share link copied! Expires in ${shareData.expires_in_hours} hours.`);
+        } catch (err) {
+            console.error('Share error:', err);
+            setError('Failed to create share link. Please try again.');
+        } finally {
+            setIsSharing(false);
+        }
+    }, [result, isSharing, toast]);
+
+    const handleGenerateSummary = useCallback(async () => {
+        if (!file) return;
+        
+        setIsGeneratingSummary(true);
+        try {
+            const { summary } = await getExecutiveSummary(file);
+            setSummary(summary);
+            setShowSummaryModal(true);
+        } catch (err) {
+            console.error('Summary error:', err);
+            toast.error('Failed to generate summary');
+        } finally {
+            setIsGeneratingSummary(false);
+        }
+    }, [file, toast]);
+
+    return (
+        <div className="w-full max-w-4xl mx-auto space-y-4 sm:space-y-6">
+            <motion.div 
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+                className="bg-white rounded-3xl p-6 sm:p-8 md:p-10 shadow-elegant border-refined"
+            >
+                <div className="flex flex-col sm:flex-row justify-between items-start gap-4 mb-4 sm:mb-6">
+                    <div className="flex-1 min-w-0">
+                        {showSurprise && surprise ? (
+                            <div 
+                                className="inline-flex items-center px-3 py-1.5 rounded-full bg-gray-100 text-gray-700 text-xs font-medium tracking-wide mb-3 border border-gray-200"
+                                role="status"
+                                aria-label="Surprise discovery"
+                            >
+                                🎲 Surprise Discovery
+                            </div>
+                        ) : (
+                            <div 
+                                className="inline-flex items-center px-3 py-1.5 rounded-full bg-gray-900 text-white text-xs font-medium tracking-wide mb-3"
+                                role="status"
+                                aria-label="Recommended chart"
+                            >
+                                Best Chart
+                            </div>
+                        )}
+                        <h2 className="text-2xl sm:text-3xl font-light text-gray-900 break-words leading-tight tracking-tight" id="chart-title" style={{ letterSpacing: '-0.01em' }}>
+                            {showSurprise && surprise ? surprise.insight : selectedChart.title}
+                        </h2>
+                    </div>
+                    
+                    <div className="flex gap-2 flex-wrap">
+                        {file && (
+                            <motion.button
+                                onClick={handleGenerateSummary}
+                                disabled={isGeneratingSummary}
+                                whileHover={{ scale: isGeneratingSummary ? 1 : 1.02 }}
+                                whileTap={{ scale: isGeneratingSummary ? 1 : 0.98 }}
+                                className="px-4 py-2 sm:px-5 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl hover:shadow-lg hover:shadow-indigo-500/20 transition-all focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 text-sm font-medium flex items-center gap-2 border border-transparent shadow-sm disabled:opacity-70 disabled:cursor-not-allowed"
+                                title="Generate Executive Summary"
+                            >
+                                {isGeneratingSummary ? (
+                                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                ) : (
+                                    <FileText className="w-4 h-4" />
+                                )}
+                                <span className="hidden sm:inline">Executive Summary</span>
+                            </motion.button>
+                        )}
+                        {surprise && (
+                            <motion.button
+                                onClick={handleSurpriseMe}
+                                whileHover={{ scale: 1.02 }}
+                                whileTap={{ scale: 0.98 }}
+                                className="px-4 py-2 sm:px-5 bg-gray-100 text-gray-700 rounded-xl hover:bg-gray-200 transition-all focus:outline-none focus:ring-2 focus:ring-gray-900 focus:ring-offset-2 text-sm font-medium flex items-center gap-2 border border-gray-200 shadow-sm"
+                                title="Discover something surprising"
+                                aria-label="Surprise me with unexpected insights"
+                            >
+                                <Sparkles className="w-4 h-4" />
+                                <span className="hidden sm:inline">Surprise Me</span>
+                            </motion.button>
+                        )}
+                        <motion.button 
+                            onClick={handleShare}
+                            disabled={isSharing}
+                            whileHover={{ scale: isSharing ? 1 : 1.02 }}
+                            whileTap={{ scale: isSharing ? 1 : 0.98 }}
+                            className="px-4 py-2 sm:px-5 bg-gray-900 text-white rounded-xl hover:bg-gray-800 transition-all focus:outline-none focus:ring-2 focus:ring-gray-900 focus:ring-offset-2 text-sm font-medium flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                            title="Create shareable link"
+                            aria-label="Create shareable link"
+                        >
+                            <Share2 className="w-4 h-4" />
+                            <span className="hidden sm:inline">{isSharing ? 'Sharing...' : 'Share'}</span>
+                        </motion.button>
+                        <motion.button 
+                            onClick={handleCopyToClipboard}
+                            whileHover={{ scale: 1.05 }}
+                            whileTap={{ scale: 0.95 }}
+                            className="p-2.5 text-gray-400 hover:text-gray-900 hover:bg-gray-100 transition-all focus:outline-none focus:ring-2 focus:ring-gray-900 focus:ring-offset-2 rounded-xl"
+                            title="Copy to clipboard"
+                            aria-label="Copy chart to clipboard"
+                        >
+                            <Copy className="w-5 h-5" aria-hidden="true" />
+                        </motion.button>
+                        <motion.button 
+                            onClick={() => handleDownload('png')}
+                            whileHover={{ scale: 1.05 }}
+                            whileTap={{ scale: 0.95 }}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                    e.preventDefault();
+                                    handleDownload('png');
+                                }
+                            }}
+                            className="p-2.5 text-gray-400 hover:text-gray-900 hover:bg-gray-100 transition-all focus:outline-none focus:ring-2 focus:ring-gray-900 focus:ring-offset-2 rounded-xl flex items-center gap-1.5"
+                            title="Download as PNG (raster image)"
+                            aria-label="Download chart as PNG image"
+                        >
+                            <Download className="w-5 h-5" aria-hidden="true" />
+                            <span className="text-xs font-medium hidden sm:inline">PNG</span>
+                        </motion.button>
+                        <motion.button 
+                            onClick={() => handleDownload('svg')}
+                            whileHover={{ scale: 1.05 }}
+                            whileTap={{ scale: 0.95 }}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                    e.preventDefault();
+                                    handleDownload('svg');
+                                }
+                            }}
+                            className="p-2.5 text-gray-400 hover:text-gray-900 hover:bg-gray-100 transition-all focus:outline-none focus:ring-2 focus:ring-gray-900 focus:ring-offset-2 rounded-xl flex items-center gap-1.5"
+                            title="Download as SVG (vector image)"
+                            aria-label="Download chart as SVG vector image"
+                        >
+                            <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                                <path d="M4 22h14a2 2 0 0 0 2-2V7.5L14.5 2H6a2 2 0 0 0-2 2v4" />
+                                <polyline points="14 2 14 8 20 8" />
+                                <path d="m3 15 2 2 4-4" />
+                            </svg>
+                            <span className="text-xs font-medium hidden sm:inline">SVG</span>
+                        </motion.button>
+                        <motion.button 
+                            onClick={() => setShowAxisPanel(!showAxisPanel)}
+                            whileHover={{ scale: 1.05 }}
+                            whileTap={{ scale: 0.95 }}
+                            className={`p-2.5 transition-all focus:outline-none focus:ring-2 focus:ring-gray-900 focus:ring-offset-2 rounded-xl ${showAxisPanel ? 'text-gray-900 bg-gray-100' : 'text-gray-400 hover:text-gray-900 hover:bg-gray-100'}`}
+                            title="Chart Settings"
+                            aria-label="Toggle chart settings"
+                            aria-expanded={showAxisPanel}
+                        >
+                            <Settings className="w-5 h-5" aria-hidden="true" />
+                        </motion.button>
+                    </div>
+                </div>
+
+                {/* Axis Customization Panel */}
+                {showAxisPanel && (
+                    <motion.div 
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        exit={{ opacity: 0, height: 0 }}
+                        className="mb-6 p-4 bg-gray-50 rounded-xl border border-gray-200"
+                    >
+                        <h4 className="text-sm font-semibold text-gray-700 mb-4">Chart Settings</h4>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div className="flex items-center gap-3">
+                                <input 
+                                    type="checkbox" 
+                                    id="showGrid" 
+                                    checked={showGrid} 
+                                    onChange={(e) => setShowGrid(e.target.checked)}
+                                    className="w-4 h-4 rounded border-gray-300 text-gray-900 focus:ring-gray-900" 
+                                />
+                                <label htmlFor="showGrid" className="text-sm text-gray-600">Show Grid Lines</label>
+                            </div>
+                            <div className="flex items-center gap-3">
+                                <input 
+                                    type="checkbox" 
+                                    id="showLabels" 
+                                    checked={showLabels} 
+                                    onChange={(e) => setShowLabels(e.target.checked)}
+                                    className="w-4 h-4 rounded border-gray-300 text-gray-900 focus:ring-gray-900" 
+                                />
+                                <label htmlFor="showLabels" className="text-sm text-gray-600">Show Axis Labels</label>
+                            </div>
+                            <div className="flex flex-col gap-1.5">
+                                <label htmlFor="xAxisTitle" className="text-xs text-gray-500 font-medium">X-Axis Title</label>
+                                <input 
+                                    type="text" 
+                                    id="xAxisTitle"
+                                    value={xAxisTitle}
+                                    onChange={(e) => setXAxisTitle(e.target.value)}
+                                    placeholder="Custom X-axis label"
+                                    className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+                                />
+                            </div>
+                            <div className="flex flex-col gap-1.5">
+                                <label htmlFor="yAxisTitle" className="text-xs text-gray-500 font-medium">Y-Axis Title</label>
+                                <input 
+                                    type="text" 
+                                    id="yAxisTitle"
+                                    value={yAxisTitle}
+                                    onChange={(e) => setYAxisTitle(e.target.value)}
+                                    placeholder="Custom Y-axis label"
+                                    className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+                                />
+                            </div>
+                        </div>
+                    </motion.div>
+                )}
+
+                {isLoading && (
+                    <div className="w-full min-h-[400px] flex items-center justify-center">
+                        <div className="flex flex-col items-center">
+                            <div className="w-12 h-12 border-2 border-gray-300 border-t-gray-900 rounded-full animate-spin mb-5" />
+                            <p className="text-gray-600 font-medium text-sm tracking-wide">Rendering chart...</p>
+                        </div>
+                    </div>
+                )}
+                
+                {error && (
+                    <div className="w-full min-h-[400px] flex items-center justify-center">
+                        <div className="text-center">
+                            <p className="text-red-700 mb-6 font-medium">{error}</p>
+                            <motion.button
+                                onClick={() => {
+                                    setError(null);
+                                    setIsLoading(true);
+                                    if (containerRef.current && chartSpec) {
+                                        const event = new Event('resize');
+                                        window.dispatchEvent(event);
+                                    }
+                                }}
+                                whileHover={{ scale: 1.02 }}
+                                whileTap={{ scale: 0.98 }}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter' || e.key === ' ') {
+                                        e.preventDefault();
+                                        setError(null);
+                                        setIsLoading(true);
+                                    }
+                                }}
+                                className="px-6 py-3 bg-gray-900 text-white rounded-xl hover:bg-gray-800 transition-all focus:outline-none focus:ring-2 focus:ring-gray-900 focus:ring-offset-2 font-medium shadow-sm"
+                                aria-label="Retry rendering chart"
+                            >
+                                Retry
+                            </motion.button>
+                        </div>
+                    </div>
+                )}
+                
+                <div 
+                    ref={containerRef} 
+                    className={`w-full min-h-[400px] overflow-hidden ${isLoading || error ? 'hidden' : ''}`}
+                    role="img"
+                    aria-label={`Chart: ${candidate.title}`}
+                    aria-describedby="chart-description"
+                    tabIndex={0}
+                    aria-live="polite"
+                    aria-atomic="true"
+                ></div>
+                
+                {!isLoading && !error && (
+                    <div className="mt-8 space-y-4">
+                        {/* Enhanced Insights */}
+                        {insights && insights.length > 0 && (
+                            <motion.div 
+                                initial={{ opacity: 0, y: 10 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                transition={{ delay: 0.2 }}
+                                id="chart-description"
+                                className="p-6 sm:p-8 bg-gray-50 rounded-2xl border border-gray-200"
+                                role="region"
+                                aria-label="Chart insights"
+                            >
+                                <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-5">
+                                    Key Insights
+                                </h3>
+                                <ul className="space-y-3">
+                                    {insights.map((insight, idx) => (
+                                        <li key={idx} className="text-gray-900 text-base leading-relaxed font-light">
+                                            <MarkdownRenderer content={insight} />
+                                        </li>
+                                    ))}
+                                </ul>
+                            </motion.div>
+                        )}
+                        
+                        {/* Fallback description if no insights */}
+                        {(!insights || insights.length === 0) && (
+                            <motion.div 
+                                initial={{ opacity: 0, y: 10 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                transition={{ delay: 0.2 }}
+                                id="chart-description"
+                                className="p-6 sm:p-8 bg-gray-50 rounded-2xl border border-gray-200"
+                                role="region"
+                                aria-label="Chart description"
+                            >
+                                <p className="text-gray-900 text-lg leading-relaxed font-light">
+                                    {selectedChart.description}
+                                </p>
+                            </motion.div>
+                        )}
+                    </div>
+                )}
+            </motion.div>
+            
+            {/* Alternative Chart Views - Smart Categorization */}
+            {alternatives && alternatives.length > 0 && (
+                <motion.div 
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.3 }}
+                    className="mt-8 sm:mt-10"
+                >
+                    {/* Top Recommendations */}
+                    <div className="mb-8">
+                        <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-4 flex items-center gap-2">
+                            <Sparkles className="w-4 h-4 text-yellow-500" />
+                            Top Recommendations
+                        </h3>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+                            {topCharts.map((alt, idx) => (
+                                <motion.button
+                                    key={`top-${idx}`}
+                                    onClick={() => handleChartSelect(alt)}
+                                    className={`p-4 rounded-xl border transition-all text-left ${
+                                        selectedChart.title === alt.title
+                                            ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-200'
+                                            : 'border-gray-200 hover:border-blue-300 bg-white hover:bg-blue-50/30'
+                                    }`}
+                                    whileHover={{ scale: 1.02 }}
+                                    whileTap={{ scale: 0.98 }}
+                                >
+                                    <div className="text-xs font-medium uppercase text-blue-600 mb-1">
+                                        {alt.chart_type}
+                                    </div>
+                                    <div className="text-sm font-medium text-gray-900 line-clamp-2">
+                                        {alt.title}
+                                    </div>
+                                </motion.button>
+                            ))}
+                        </div>
+                    </div>
+                    
+                    {/* Filter Tabs */}
+                    <div className="mb-4">
+                        <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">
+                            All Charts ({filteredCharts.length})
+                        </h3>
+                        <div className="flex flex-wrap gap-2 mb-4">
+                            {chartTypes.map(type => (
+                                <button
+                                    key={type}
+                                    onClick={() => setActiveFilter(type)}
+                                    className={`px-3 py-1.5 text-xs font-medium rounded-full transition-all ${
+                                        activeFilter === type
+                                            ? 'bg-gray-900 text-white'
+                                            : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                                    }`}
+                                >
+                                    {type === 'all' ? 'All Types' : type.toUpperCase()}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                    
+                    {/* Grouped by Column - Collapsible */}
+                    <div className="space-y-3 max-h-[500px] overflow-y-auto">
+                        {Object.entries(groupedByColumn).map(([column, charts]) => (
+                            <div key={column} className="border border-gray-200 rounded-xl overflow-hidden">
+                                <button
+                                    onClick={() => toggleColumnExpand(column)}
+                                    className="w-full px-4 py-3 bg-gray-50 hover:bg-gray-100 flex justify-between items-center text-left transition-colors"
+                                >
+                                    <span className="font-medium text-gray-700 text-sm truncate pr-4">
+                                        {column}
+                                    </span>
+                                    <span className="flex items-center gap-2 flex-shrink-0">
+                                        <span className="text-xs text-gray-500 bg-gray-200 px-2 py-0.5 rounded-full">
+                                            {charts.length}
+                                        </span>
+                                        <span className={`text-gray-400 transition-transform ${expandedColumns.has(column) ? 'rotate-180' : ''}`}>
+                                            ▼
+                                        </span>
+                                    </span>
+                                </button>
+                                {expandedColumns.has(column) && (
+                                    <div className="p-3 grid grid-cols-1 sm:grid-cols-2 gap-2 bg-white">
+                                        {charts.map((alt, idx) => (
+                                            <button
+                                                key={`${column}-${idx}`}
+                                                onClick={() => handleChartSelect(alt)}
+                                                className={`p-3 rounded-lg border text-left transition-all ${
+                                                    selectedChart.title === alt.title
+                                                        ? 'border-gray-900 bg-gray-900 text-white'
+                                                        : 'border-gray-200 hover:border-gray-300 bg-gray-50 hover:bg-gray-100'
+                                                }`}
+                                            >
+                                                <div className={`text-xs font-medium uppercase mb-1 ${
+                                                    selectedChart.title === alt.title ? 'text-gray-300' : 'text-gray-500'
+                                                }`}>
+                                                    {alt.chart_type}
+                                                </div>
+                                                <div className={`text-sm line-clamp-1 ${
+                                                    selectedChart.title === alt.title ? 'text-white' : 'text-gray-800'
+                                                }`}>
+                                                    {alt.title}
+                                                </div>
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                </motion.div>
+            )}
+
+            {/* Data Preview Panel */}
+            <DataPreview 
+                dataset={dataset} 
+                filename={result?.filename}
+            />
+
+            {/* Executive Summary Modal */}
+            {showSummaryModal && summary && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
+                    <motion.div 
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+                        onClick={() => setShowSummaryModal(false)}
+                    />
+                    <motion.div 
+                        initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                        animate={{ opacity: 1, scale: 1, y: 0 }}
+                        exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                        className="relative bg-white w-full max-w-3xl max-h-[85vh] rounded-3xl shadow-2xl overflow-hidden flex flex-col"
+                    >
+                        <div className="flex items-center justify-between p-6 border-b border-gray-100 bg-gray-50/50">
+                            <div className="flex items-center gap-3">
+                                <div className="p-2 bg-indigo-100 text-indigo-600 rounded-lg">
+                                    <FileText className="w-5 h-5" />
+                                </div>
+                                <h3 className="text-xl font-semibold text-gray-900">Executive Summary</h3>
+                            </div>
+                            <button 
+                                onClick={() => setShowSummaryModal(false)}
+                                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-colors"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+                        
+                        <div className="flex-1 overflow-y-auto p-6 sm:p-8">
+                            <MarkdownRenderer content={summary} />
+                        </div>
+
+                        <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-end">
+                            <button
+                                onClick={() => {
+                                    navigator.clipboard.writeText(summary);
+                                    toast.success('Summary copied to clipboard');
+                                }}
+                                className="px-4 py-2 text-sm font-medium text-gray-700 hover:bg-white hover:shadow-sm border border-transparent hover:border-gray-200 rounded-lg transition-all flex items-center gap-2"
+                            >
+                                <Copy className="w-4 h-4" />
+                                Copy Text
+                            </button>
+                        </div>
+                    </motion.div>
+                </div>
+            )}
+        </div>
+    );
+}
