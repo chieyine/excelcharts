@@ -10,6 +10,12 @@ export interface ColumnProfile {
     min?: number;
     max?: number;
     mean?: number;
+    
+    // Survey data detection
+    is_checkbox?: boolean;  // True if column contains comma-separated multi-select values
+    is_likert?: boolean;    // True if column contains Likert scale responses
+    likert_order?: string[]; // Ordered list of Likert values (positive to negative)
+    grid_group?: string;    // Group name for grid questions
 }
 
 export interface DatasetProfile {
@@ -27,6 +33,8 @@ export interface ChartCandidate {
     title: string;
     score: number;
     spec: VisualizationSpec;
+    group_name?: string; // Section title for grouping
+    group_score?: number; // Sorting priority for groups
 }
 
 export interface AnalysisResult {

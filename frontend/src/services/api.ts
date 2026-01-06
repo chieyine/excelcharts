@@ -253,3 +253,27 @@ export async function getExecutiveSummary(file: File): Promise<{ summary: string
 
     return response.json();
 }
+
+/**
+ * Generate detailed narrative report
+ */
+export async function generateNarrativeReport(
+    summary: any,
+    columns: any[],
+    charts: string[]
+): Promise<{ markdown: string }> {
+    const response = await fetch(`${API_URL}/analyze/report`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ summary, columns, charts }),
+    });
+
+    if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail?.detail || errorData.detail || 'Failed to generate report');
+    }
+
+    return response.json();
+}

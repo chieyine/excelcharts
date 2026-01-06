@@ -9,16 +9,16 @@ from typing import Dict, Any, Optional, List
 # Colorblind-safe color palettes
 COLORBLIND_SAFE_PALETTES = {
     'categorical': [
-        '#1f77b4',  # Blue
-        '#ff7f0e',  # Orange
-        '#2ca02c',  # Green
-        '#d62728',  # Red
-        '#9467bd',  # Purple
-        '#8c564b',  # Brown
-        '#e377c2',  # Pink
-        '#7f7f7f',  # Gray
-        '#bcbd22',  # Yellow-green
-        '#17becf'   # Cyan
+        '#6366f1',  # Indigo
+        '#ec4899',  # Pink
+        '#10b981',  # Emerald
+        '#f59e0b',  # Amber
+        '#8b5cf6',  # Violet
+        '#06b6d4',  # Cyan
+        '#ef4444',  # Red
+        '#84cc16',  # Lime
+        '#f97316',  # Orange
+        '#14b8a6'   # Teal
     ],
     'sequential': [
         '#f7fbff',
@@ -113,7 +113,7 @@ def generate_vega_spec(
     
     # Base spec with "Premium" defaults
     spec = {
-        "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+        "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
         "title": {
             "text": display_title,
             "fontSize": 18,
@@ -161,7 +161,7 @@ def generate_vega_spec(
             {
                 "mark": {
                     "type": "area",
-                    "line": {"color": "#2563eb", "strokeWidth": 3},
+                    "line": {"color": "#6366f1", "strokeWidth": 3},
                     "color": {
                         "x1": 1,
                         "y1": 1,
@@ -170,7 +170,7 @@ def generate_vega_spec(
                         "gradient": "linear",
                         "stops": [
                             {"offset": 0, "color": "white"},
-                            {"offset": 1, "color": "#2563eb"}
+                            {"offset": 1, "color": "#6366f1"}
                         ]
                     },
                     "opacity": 0.2
@@ -183,7 +183,7 @@ def generate_vega_spec(
             # Interactive Points on Hover (Only if not using count agg, as points are messy for count over time usually)
             # Actually, points are fine for count over time if aggregated.
             {
-                "mark": {"type": "circle", "size": 60, "color": "#2563eb", "filled": True},
+                "mark": {"type": "circle", "size": 60, "color": "#6366f1", "filled": True},
                 "encoding": {
                     "x": {"field": x, "type": x_type},
                     "y": y_def,
@@ -227,21 +227,39 @@ def generate_vega_spec(
         spec["mark"] = {
             "type": "bar",
             "cornerRadiusEnd": 6,
-            "color": "#2563eb",
-            "width": {"band": 0.6}
+            "width": {"band": 0.7}
         }
+        
+        # Add automatic colorful encoding if no color specified
+        if not color:
+            spec["encoding"] = {
+                 "color": {
+                    "field": x, 
+                    "type": x_type, 
+                    "legend": None,
+                    "scale": {"scheme": "tableau10"} 
+                }
+            }
+        else:
+             spec["mark"]["color"] = "#6366f1"
         
         # Handle Aggregation
         if not y:
             # Count mode - no filter needed, Vega-Lite handles nulls in aggregation
+            # Sort by frequency (-y) ONLY for nominal data. 
+            # For ordinal/temporal, keep natural order (or explicit sort if provided).
+            x_sort = "-y" if x_type == "nominal" else None
+            
             spec["encoding"] = {
-                "x": {"field": x, "type": x_type, "axis": {"labelAngle": -45, "labelLimit": 100}, "sort": "-y"},
+                "x": {"field": x, "type": x_type, "axis": {"labelAngle": -45, "labelLimit": 100}},
                 "y": {"aggregate": "count", "title": "Count"},
                 "tooltip": [
                     {"field": x, "type": x_type},
                     {"aggregate": "count", "title": "Count", "format": ","}
                 ]
             }
+            if x_sort:
+                spec["encoding"]["x"]["sort"] = x_sort
         elif y_aggregate:
             # Custom aggregation mode (sum, mean, min, max)
             agg_title = f"{y_aggregate.upper()} of {y}"
@@ -353,14 +371,14 @@ def generate_vega_spec(
             
     elif chart_type == "heatmap":
         # Heatmap: X = Category1, Y = Category2, Color = Count/Value
-        spec["mark"] = {"type": "rect"}
+        spec["mark"] = {"type": "rect", "cornerRadius": 2, "stroke": "white", "strokeWidth": 1}
         spec["encoding"] = {
-            "x": {"field": x, "type": x_type, "axis": {"labelAngle": 0}},
-            "y": {"field": y, "type": y_type} if y else {"field": x, "type": x_type},
+            "x": {"field": x, "type": x_type, "axis": {"labelAngle": 0, "title": x, "grid": False}},
+            "y": {"field": y, "type": y_type, "axis": {"title": y, "grid": False}} if y else {"field": x, "type": x_type},
             "color": {
                 "aggregate": "count",
-                "scale": {"scheme": "blues"},
-                "legend": {"title": "Count"}
+                "scale": {"scheme": "viridis"},
+                "legend": {"title": "Frequency", "orient": "right"}
             },
             "tooltip": [
                 {"field": x, "type": x_type},
@@ -389,7 +407,7 @@ def generate_vega_spec(
         if color and chart_type not in ["stacked_bar", "heatmap", "donut"]:
             spec["encoding"]["color"] = {
                 "field": color,
-                "legend": {"title": None, "orient": "top"},
+                "legend": {"title": None, "orient": "top", "symbolLimit": 10, "labelLimit": 150},
                 "scale": {"scheme": "tableau10"}
             }
     
@@ -422,7 +440,7 @@ def generate_correlation_matrix_spec(
     cols = numeric_columns[:5]
     
     spec = {
-        "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+        "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
         "title": {
             "text": title,
             "fontSize": 18,

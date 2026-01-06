@@ -11,6 +11,12 @@ class ColumnProfile(BaseModel):
     min: Optional[Union[float, str]] = None  # float for numeric, ISO string for temporal
     max: Optional[Union[float, str]] = None  # float for numeric, ISO string for temporal
     mean: Optional[float] = None
+    
+    # Survey data detection (new fields)
+    is_checkbox: bool = False  # True if column contains comma-separated multi-select values
+    is_likert: bool = False  # True if column contains Likert scale responses
+    likert_order: Optional[List[str]] = None  # Ordered list of Likert values
+    grid_group: Optional[str] = None  # Group name for grid questions (e.g., "Rate X")
 
 class DatasetProfile(BaseModel):
     row_count: int
@@ -26,6 +32,8 @@ class ChartCandidate(BaseModel):
     description: str
     score: float
     spec: Dict[str, Any]  # The Vega-Lite spec
+    group_name: Optional[str] = None  # New: Section title provided by AI
+    group_score: Optional[float] = 0.0  # New: Sort order for groups
 
 class AnalysisResult(BaseModel):
     filename: str
@@ -35,3 +43,11 @@ class AnalysisResult(BaseModel):
     dataset: List[Dict[str, Any]]
     insights: List[str] = []  # Enhanced natural language insights
     surprise: Optional[Dict[str, Any]] = None  # Surprise me discovery
+
+class ReportRequest(BaseModel):
+    summary: Dict[str, Any]
+    columns: List[Dict[str, Any]]
+    charts: List[str]
+
+class ReportResponse(BaseModel):
+    markdown: str

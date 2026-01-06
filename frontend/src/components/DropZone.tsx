@@ -10,6 +10,21 @@ interface DropZoneProps {
     onError?: (error: string) => void;
 }
 
+// Sample data CSV content
+const SAMPLE_DATA = `Category,Sales,Quarter,Region
+Electronics,45000,Q1,North
+Clothing,32000,Q1,South
+Food,28000,Q1,East
+Electronics,52000,Q2,North
+Clothing,38000,Q2,South
+Food,31000,Q2,East
+Electronics,48000,Q3,North
+Clothing,35000,Q3,South
+Food,29000,Q3,East
+Electronics,61000,Q4,North
+Clothing,42000,Q4,South
+Food,36000,Q4,East`;
+
 // Configuration constants
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 const ALLOWED_TYPES = [
@@ -62,6 +77,12 @@ export default function DropZone({ onFileSelected, isUploading, onError }: DropZ
         setValidationError(null);
         onFileSelected(file);
     }, [onFileSelected, onError]);
+
+    const handleSampleData = useCallback(() => {
+        const blob = new Blob([SAMPLE_DATA], { type: 'text/csv' });
+        const file = new File([blob], 'sample-sales-data.csv', { type: 'text/csv' });
+        onFileSelected(file);
+    }, [onFileSelected]);
 
     const handleDragOver = useCallback((e: React.DragEvent) => {
         e.preventDefault();
@@ -185,10 +206,10 @@ export default function DropZone({ onFileSelected, isUploading, onError }: DropZ
                     rounded-3xl cursor-pointer 
                     transition-all duration-300 ease-out
                     focus:outline-none focus:ring-2 focus:ring-gray-900 focus:ring-offset-2
-                    border-refined shadow-elegant
+                    border-2 shadow-elegant
                     ${isDragging 
-                        ? 'bg-gray-50 border-gray-300 scale-[1.01]' 
-                        : 'bg-white hover:bg-gray-50/50 border-gray-200 hover:border-gray-300'
+                        ? 'bg-blue-50 border-blue-400 scale-[1.02] shadow-lg shadow-blue-100' 
+                        : 'bg-white hover:bg-gray-50/50 border-gray-200 hover:border-gray-300 border-dashed'
                     }
                 `}
                 animate={{
@@ -260,6 +281,23 @@ export default function DropZone({ onFileSelected, isUploading, onError }: DropZ
                     )}
                 </AnimatePresence>
             </motion.label>
+            
+            {/* Sample Data Button */}
+            {!isUploading && (
+                <motion.div 
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.2 }}
+                    className="mt-4 text-center"
+                >
+                    <button
+                        onClick={handleSampleData}
+                        className="text-sm text-gray-500 hover:text-gray-900 underline underline-offset-2 transition-colors"
+                    >
+                        Or try with sample data →
+                    </button>
+                </motion.div>
+            )}
             
             {validationError && (
                 <motion.div

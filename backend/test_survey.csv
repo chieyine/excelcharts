@@ -1,0 +1,16 @@
+Timestamp,What is your age in years?,What is your gender?,What is your current academic level?,What is your field of study?,For which of the following symptoms do you most commonly self-medicate? (Select all that apply),Which of the following drug classes have you used for self-medication? (Select all that apply),Please indicate your level of agreement with the following reasons for self-medication. (The illness is too minor),Please indicate your level of agreement with the following reasons for self-medication. (It saves time),Please indicate whether the following statements about OTC drugs are True False or if you Dont Know. (Taking more than the recommended dose can cause liver damage)
+2024/01/15 10:00:00,20-25 years,Male,Undergraduate,Health Sciences,Headache,Pain relievers/Analgesics,Strongly Agree,Agree,True
+2024/01/15 10:05:00,26-30 years,Female,Postgraduate Diploma,Education/Arts,"Headache, Fever",Pain relievers/Analgesics,Agree,Strongly Agree,True
+2024/01/15 10:10:00,20-25 years,Male,Undergraduate,Science/Technology,"Headache, Common cold/Flu, Fever","Pain relievers/Analgesics, Cold/Flu remedies",Neutral,Agree,False
+2024/01/15 10:15:00,31-40 years,Female,Masters,Health Sciences,"Common cold/Flu, Stomach ache/Indigestion","Cold/Flu remedies, Antacids/Digestive aids",Agree,Neutral,True
+2024/01/15 10:20:00,20-25 years,Male,Undergraduate,Business/Management,Headache,Pain relievers/Analgesics,Strongly Agree,Strongly Agree,I dont know
+2024/01/15 10:25:00,26-30 years,Female,Undergraduate,Health Sciences,"Headache, Menstrual pain","Pain relievers/Analgesics, Vitamins/Supplements",Agree,Agree,True
+2024/01/15 10:30:00,41-50 years,Male,Doctorate,Science/Technology,Fever,Cold/Flu remedies,Disagree,Neutral,True
+2024/01/15 10:35:00,20-25 years,Female,Undergraduate,Education/Arts,"Headache, Sore throat","Pain relievers/Analgesics, Cold/Flu remedies",Neutral,Disagree,False
+2024/01/15 10:40:00,26-30 years,Male,Postgraduate Diploma,Health Sciences,"Headache, Fever, Muscle/Joint pain","Pain relievers/Analgesics, Vitamins/Supplements",Strongly Agree,Agree,True
+2024/01/15 10:45:00,31-40 years,Female,Masters,Business/Management,"Common cold/Flu, Insomnia/Sleep difficulty","Cold/Flu remedies, Sedatives/Sleep aids",Agree,Strongly Agree,I dont know
+2024/01/15 10:50:00,20-25 years,Male,Undergraduate,Health Sciences,Headache,Pain relievers/Analgesics,Strongly Agree,Agree,True
+2024/01/15 10:55:00,20-25 years,Female,Undergraduate,Science/Technology,"Headache, Fever","Pain relievers/Analgesics, Anti-allergics/Antihistamines",Neutral,Neutral,False
+2024/01/15 11:00:00,26-30 years,Male,Postgraduate Diploma,Health Sciences,"Headache, Common cold/Flu","Pain relievers/Analgesics, Cold/Flu remedies",Agree,Agree,True
+2024/01/15 11:05:00,20-25 years,Female,Undergraduate,Education/Arts,Menstrual pain,Pain relievers/Analgesics,Strongly Agree,Strongly Agree,True
+2024/01/15 11:10:00,31-40 years,Male,Masters,Health Sciences,"Fever, Stomach ache/Indigestion","Cold/Flu remedies, Antacids/Digestive aids",Disagree,Agree,True

@@ -93,7 +93,8 @@ def _call_groq(prompt: str, system_prompt: str, max_tokens: int = 300) -> Option
             {"role": "user", "content": prompt}
         ],
         max_tokens=max_tokens,
-        temperature=0.3
+        temperature=0.3,
+        timeout=15.0  # 15s timeout to prevent hanging
     )
     return response.choices[0].message.content
 
@@ -105,8 +106,21 @@ def _call_gemini(prompt: str, system_prompt: str) -> Optional[str]:
         return None
     
     full_prompt = f"{system_prompt}\n\n{prompt}"
-    response = model.generate_content(full_prompt)
-    return response.text
+    try:
+        # Attempt to use timeout (supported in newer library versions)
+        response = model.generate_content(
+            full_prompt, 
+            request_options={"timeout": 15}
+        )
+        return response.text
+    except TypeError:
+        # Fallback for older library versions (no timeout)
+        logger.warning("Gemini timeout config not supported, proceeding without timeout")
+        response = model.generate_content(full_prompt)
+        return response.text
+    except Exception as e:
+        logger.error(f"Gemini generation failed: {e}")
+        return None
 
 
 def _call_ai_with_fallback(prompt: str, system_prompt: str, max_tokens: int = 300) -> Optional[str]:
@@ -447,6 +461,66 @@ Keep each suggestion to 1-2 sentences. Use plain text, no markdown."""
         formatted = _format_ai_response(ai_result)
         # Add as a single insight block, not multiple unformatted lines
         suggestions.insert(0, "🤖 " + formatted.replace('\n', '\n   '))
+        
+    return suggestions
+
+
+def generate_narrative_report(
+    data_summary: Dict[str, Any],
+    column_profiles: List[Dict[str, Any]],
+    charts_context: List[str]
+) -> str:
+    """
+    Generate a detailed, humanized narrative report.
+    """
+    if not get_groq_client() and not get_gemini_model():
+        return "## Error\nAI services are not configured."
+
+    # Summarize columns
+    cols_desc = "\n".join([
+        f"- {c['name']} ({c['dtype']})" for c in column_profiles[:20]
+    ])
+    
+    # Charts availability
+    charts_list = "\n".join([f"Chart {i}: {desc}" for i, desc in enumerate(charts_context)])
+    
+    prompt = f"""Write a detailed, engaging business report for this dataset.
+    
+CONTEXT:
+Dataset: {data_summary.get('row_count')} rows, {data_summary.get('column_count')} columns.
+Key Columns:
+{cols_desc}
+
+Visuals Available:
+{charts_list}
+
+INSTRUCTIONS:
+1. **Tone**: You are a senior analyst speaking to a non-technical client. Be conversational, direct, and human. 
+   - DO NOT use words like "leverage", "utilize", "pivotal", "delve", "showcase".
+   - DO NOT say "The dataset contains...". Say "We looked at..." or "The data shows...".
+   - Make it sound like a story.
+
+2. **Structure**:
+   # Executive Summary
+   (2-3 paragraphs. High level impact.)
+   
+   # Key Trends & Analysis
+   (Detailed breakdown. Group related findings.)
+   
+   # Recommendations
+   (Actionable next steps.)
+
+3. **Embed Charts**: 
+   - You MUST insert `{{{{CHART_0}}}}`, `{{{{CHART_1}}}}` etc. where they fit best in the narrative.
+   - Don't just list them. Discuss the finding, then show the chart.
+
+Write the full report in Markdown."""
+
+    return _call_ai_with_fallback(
+        prompt, 
+        "You are a human business analyst. Write naturally.", 
+        max_tokens=2000
+    ) or "## Report Generation Failed\nCould not generate report."
     
     return suggestions[:6] if suggestions else ["✅ Data quality looks good - no issues detected"]
 
@@ -821,3 +895,68 @@ def generate_chart_annotations(
              pass
              
     return []
+
+
+def analyze_dataset_structure(
+    profile: Dict[str, Any],
+    sample_data: List[Dict[str, Any]]
+) -> Optional[Dict[str, Any]]:
+    """
+    Use AI to understand the dataset structure and group columns into logical sections.
+    This drives the dashboard layout.
+    """
+    if not get_groq_client() and not get_gemini_model():
+        return None
+
+    # Prepare context
+    cols_desc = "\n".join([
+        f"- {sanitize_for_prompt(c['name'], 50)} ({c['dtype']}): {c.get('unique_count', '?')} unique"
+        for c in profile.get('columns', [])[:50]
+    ])
+    
+    sample_rows = ""
+    if sample_data:
+        # Simplified samples
+        sample_rows = "\nSample Data:\n" + "\n".join([
+            str({k: v for k, v in row.items() if k in [c['name'] for c in profile.get('columns', [])[:10]]})
+            for row in sample_data[:2]
+        ])
+
+    prompt = f"""Analyze this dataset structure and help me organize a dashboard.
+    
+Dataset Columns:
+{cols_desc}
+{sample_rows}
+
+Task: Group these columns into logical sections to unclutter the view.
+1. Identify "Grid/Matrix" questions (e.g., related rating scales) and group them.
+2. Identify "Demographics" (Age, Gender, Region).
+3. Identify "Performance Metrics".
+
+Reply in JSON format:
+{{
+  "sections": [
+    {{
+      "title": "Section Title (e.g., 'Respondent Profile')",
+      "columns": ["col1", "col2"],
+      "type": "standard"  // or "grid" if it's a Likert/Matrix group coverage
+    }}
+  ]
+}}
+"""
+
+    response = _call_ai_with_fallback(
+        prompt,
+        "You are a data architect. Output valid JSON only.",
+        max_tokens=600
+    )
+    
+    if response:
+        try:
+            # Clean markdown
+            json_str = response.replace('```json', '').replace('```', '').strip()
+            return json.loads(json_str)
+        except Exception as e:
+            logger.warning(f"Failed to parse AI structure analysis: {e}")
+            
+    return None

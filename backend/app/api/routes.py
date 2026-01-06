@@ -11,7 +11,7 @@ from app.services.inference import infer_charts
 from app.services.generator import generate_vega_spec
 from app.services.insights import generate_insights
 from app.services.surprise import generate_surprise
-from app.core.schemas import AnalysisResult, ChartCandidate
+from app.core.schemas import AnalysisResult, ChartCandidate, ReportRequest, ReportResponse
 from app.core.errors import ErrorCodes, get_error_response
 from app.core.config import get_settings
 from app.core.sanitization import sanitize_filename, sanitize_for_logging
@@ -20,7 +20,8 @@ from app.core.cache import get_file_cache, get_profile_cache, generate_file_cach
 from app.services.ai_insights import (
     generate_ai_insights, 
     suggest_data_cleaning, 
-    generate_executive_summary
+    generate_executive_summary,
+    generate_narrative_report
 )
 
 logger = logging.getLogger(__name__)
@@ -128,34 +129,79 @@ async def _process_upload(file: UploadFile, request: Request, skip_ai: bool = Fa
                 detail=error_info
             )
         
-        # 2. Profile (with caching)
-        profile_cache = get_profile_cache()
+        # IMPORTANT: Strip parenthetical content BEFORE profiling
+        # This ensures checkbox detection doesn't see commas inside parentheses
+        # e.g., "Pain relievers (e.g., Paracetamol, Ibuprofen)" -> "Pain relievers"
+        from app.services.parser import strip_parenthetical_content
+        for col in df.columns:
+            if df[col].dtype == 'object':
+                try:
+                    df[col] = df[col].apply(
+                        lambda x: strip_parenthetical_content(x) if pd.notna(x) else x
+                    )
+                except Exception as e:
+                    logger.debug(f"Could not strip parenthetical content from {col}: {e}")
         
-        # Generate cache key based on dataframe characteristics
-        # Use row count, col count, and column names/dtypes as key
-        cache_key_data = f"{len(df)}:{len(df.columns)}:{','.join(f'{c}:{str(df[c].dtype)}' for c in df.columns)}"
-        profile_cache_key = hashlib.sha256(cache_key_data.encode()).hexdigest()
         
-        # Try cache first
-        cached_profile = profile_cache.get(profile_cache_key)
-        if cached_profile is not None:
-            logger.info(
-                f"Using cached profile for dataset: {cached_profile.row_count} rows, {cached_profile.col_count} columns"
-            )
-            profile = cached_profile
+        # 2. Profile (disable caching temporarily to ensure new detection logic is used)
+        # TODO: Re-enable caching once checkbox detection is stable
+        profile = profile_dataset(df)
+        
+        # Log detected checkbox columns
+        checkbox_cols_detected = [c.name for c in profile.columns if c.is_checkbox]
+        if checkbox_cols_detected:
+            logger.info(f"Detected {len(checkbox_cols_detected)} CHECKBOX columns: {checkbox_cols_detected[:5]}")
         else:
-            # Profile the dataset
-            profile = profile_dataset(df)
-            # Cache the profile
-            profile_cache.set(profile_cache_key, profile, ttl=3600)  # 1 hour
+            logger.warning("No checkbox columns detected in dataset")
+        
+        # Log detected Likert columns
+        likert_cols_detected = [c.name for c in profile.columns if c.is_likert]
+        if likert_cols_detected:
+            logger.info(f"Detected {len(likert_cols_detected)} LIKERT columns")
         
         logger.info(
             f"Profiled dataset: {profile.row_count} rows, {profile.col_count} columns"
         )
         
-        # 3. Infer charts
+       # 3. Infer charts
         # Prepare sample data for AI inference
         sample_rows = df.head(10).replace({float('nan'): None}).to_dict(orient='records')
+        
+        # Log checkbox columns for awareness
+        # We convert them to lists so Vega-Lite's flatten transform works correctly
+        checkbox_cols = [col.name for col in profile.columns if col.is_checkbox]
+        if checkbox_cols:
+            logger.info(f"Detected checkbox columns: {checkbox_cols}")
+            for col_name in checkbox_cols:
+                if col_name in df.columns:
+                    try:
+                        # Convert "A, B" -> ["A", "B"]
+                        # This allows Vega-Lite to count individual selections using transform: flatten
+                        df[col_name] = df[col_name].apply(
+                            lambda x: [s.strip() for s in str(x).split(',')] if pd.notna(x) and ',' in str(x) else [str(x)] if pd.notna(x) else []
+                        )
+                        logger.info(f"Converted {col_name} to list format for chart generation")
+                    except Exception as e:
+                        logger.warning(f"Failed to convert checkbox column {col_name}: {e}")
+        
+        # Handle "Other (please specify)" columns
+        # Group high-cardinality freetext responses into "Other" category for cleaner charts
+        for col in profile.columns:
+            name_lower = col.name.lower()
+            # Detect "Other" columns by name pattern
+            if any(p in name_lower for p in ['other', 'specify', 'please describe', 'if other']):
+                if col.dtype in ('nominal', 'ordinal') and col.unique_count > 10:
+                    if col.name in df.columns:
+                        try:
+                            # Replace all non-null values with "Other"
+                            # This groups all freetext responses into one category
+                            df[col.name] = df[col.name].apply(
+                                lambda x: "Other" if pd.notna(x) and str(x).strip() != "" else None
+                            )
+                            logger.info(f"Grouped '{col.name}' freetext responses into 'Other' category")
+                        except Exception as e:
+                            logger.warning(f"Failed to process Other column {col.name}: {e}")
+        
         candidates = infer_charts(profile, sample_rows)
         
         # Handle empty candidates with fallback
@@ -276,7 +322,7 @@ async def _process_upload(file: UploadFile, request: Request, skip_ai: bool = Fa
 async def upload_file(
     request: Request, 
     file: UploadFile = File(...),
-    skip_ai: bool = False
+    skip_ai: bool = False  # Enabled for reporting feature (with timeouts)
 ):
     """
     Upload and analyze a file to generate chart recommendations.
@@ -377,3 +423,25 @@ async def get_executive_summary_endpoint(
         error_info = get_error_response(ErrorCodes.INTERNAL_ERROR, str(e))
         error_info['correlation_id'] = correlation_id
         raise HTTPException(status_code=500, detail=error_info)
+
+
+@router.post("/analyze/report", response_model=ReportResponse, tags=["Analysis"])
+async def create_report(request: ReportRequest):
+    """
+    Generate a detailed narrative report based on analysis results.
+    """
+    # Rate limit check (manual since we are inside a post function, or rely on global?)
+    # Ideally should use dependencies, but for now we skip strict rate limit on this secondary action
+    
+    logger.info("Generating narrative report via AI")
+    try:
+        markdown = generate_narrative_report(
+            request.summary,
+            request.columns,
+            request.charts
+        )
+        return ReportResponse(markdown=markdown)
+    except Exception as e:
+        logger.error(f"Report generation failed: {e}")
+        # Fallback error report
+        return ReportResponse(markdown=f"## Error Generating Report\n\nFailed to generate report: {str(e)}")

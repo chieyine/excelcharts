@@ -344,12 +344,19 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df = df.dropna(how='all', axis=0)
     df = df.dropna(how='all', axis=1)
     
-    # Sanitize column names - remove newlines, carriage returns, and excess whitespace
-    # This is critical for Vega-Lite which breaks on newlines in field names
+    # Sanitize column names - remove characters that break Vega-Lite field parsing
+    # Vega-Lite uses quotes and brackets for field access paths, so these must be removed
     def sanitize_column_name(col):
         if isinstance(col, str):
             # Replace newlines and carriage returns with space
             col = col.replace('\n', ' ').replace('\r', ' ')
+            
+            # Remove apostrophes and quotes (breaks Vega-Lite field parsing)
+            col = col.replace("'", "").replace('"', "").replace("`", "")
+            
+            # Replace brackets with parentheses (safer for field names)
+            col = col.replace("[", "(").replace("]", ")")
+            
             # Collapse multiple spaces
             col = ' '.join(col.split())
         return col
@@ -357,3 +364,29 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df.columns = [sanitize_column_name(col) for col in df.columns]
     
     return df
+
+
+def strip_parenthetical_content(value: str) -> str:
+    """
+    Strip parenthetical content from a string.
+    
+    Example:
+        "Health Sciences (e.g., Public Health, Health Management)" -> "Health Sciences"
+        "Postgraduate Diploma (PGD)" -> "Postgraduate Diploma"
+        "Doctorate (Ph.D.)" -> "Doctorate"
+    
+    This prevents commas inside parentheses from being misinterpreted as 
+    multi-select separators.
+    """
+    import re
+    if not isinstance(value, str):
+        return value
+    
+    # Remove content in parentheses (including the parentheses)
+    # Pattern matches (anything) including nested content
+    result = re.sub(r'\s*\([^)]*\)\s*', '', value)
+    
+    # Clean up any double spaces and strip
+    result = ' '.join(result.split()).strip()
+    
+    return result if result else value  # Return original if result is empty

@@ -90,8 +90,7 @@ async def create_share(result: AnalysisResult, expires_hours: int = Query(24, ge
         token = create_share_link(result, expires_hours)
         
         # Clean up expired links periodically
-        if len(_share_store) % 10 == 0:
-            cleanup_expired_links()
+        cleanup_expired_links()
         
         return {
             "share_token": token,

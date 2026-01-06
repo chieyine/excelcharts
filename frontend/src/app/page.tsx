@@ -53,14 +53,33 @@ export default function Home() {
         return;
       }
 
-      // Extract error message from structured error response
+      // Extract error message and provide specific, helpful feedback
       let errorMessage = 'Something went wrong. Please try again.';
       if (err instanceof Error) {
-        errorMessage = err.message;
+        const msg = err.message.toLowerCase();
+        
+        // Provide specific messages based on error type
+        if (msg.includes('network') || msg.includes('fetch')) {
+          errorMessage = 'Connection failed. Please check your internet and try again.';
+        } else if (msg.includes('timeout')) {
+          errorMessage = 'Request timed out. Your file might be too large - try a smaller one.';
+        } else if (msg.includes('file') && msg.includes('type')) {
+          errorMessage = 'Invalid file format. Please upload a CSV or Excel file (.csv, .xlsx, .xls).';
+        } else if (msg.includes('empty') || msg.includes('no data')) {
+          errorMessage = 'Your file appears to be empty. Please check the file and try again.';
+        } else if (msg.includes('parse') || msg.includes('column')) {
+          errorMessage = 'Could not read your data. Make sure your file has proper column headers.';
+        } else if (msg.includes('size') || msg.includes('large')) {
+          errorMessage = 'File too large. Maximum size is 50MB.';
+        } else {
+          // Use original message if it's informative
+          errorMessage = err.message;
+        }
+        
         // Check if it's a structured error with suggestion
         const errorObj = err as Error & { suggestion?: string };
         if (errorObj.suggestion) {
-          errorMessage = `${err.message}. ${errorObj.suggestion}`;
+          errorMessage = `${errorMessage} ${errorObj.suggestion}`;
         }
       }
       
@@ -106,8 +125,9 @@ export default function Home() {
               fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif',
               letterSpacing: '-0.02em'
             }}
+            title="ExcelToCharts.com"
           >
-            Instant Charts
+            ExcelToCharts
           </motion.h1>
           {!result && (
             <motion.p 
@@ -116,9 +136,9 @@ export default function Home() {
               transition={{ delay: 0.2, duration: 0.6 }}
               className="text-lg sm:text-xl md:text-2xl text-gray-600 max-w-2xl font-light leading-relaxed"
             >
-              Upload your data. See your story.
+              Turn your Excel, CSV, and Google Sheets into beautiful charts.
               <br className="hidden sm:block"/>
-              <span className="text-gray-400 block mt-2 text-base sm:text-lg">No setup. No learning curve.</span>
+              <span className="text-gray-400 block mt-2 text-base sm:text-lg">Free. Instant. No signup required.</span>
             </motion.p>
           )}
         </motion.div>
